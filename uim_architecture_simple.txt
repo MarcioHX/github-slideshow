@@ -1,0 +1,252 @@
+--------------------------------------------------------------------------------
+3. ARCHITECTURE LAYERS
+--------------------------------------------------------------------------------
+
+LAYER 1 — NETWORK AND SECURITY
+LAYER 2 — PRESENTATION (FRONTENDS)
+LAYER 3 — APPLICATION (API)
+LAYER 4 — DATA PROCESSING (BACKGROUND WORKER)
+LAYER 5 — DATA PERSISTENCE (DATABASE)
+LAYER 6 — COMMUNICATIONS (EMAIL)
+LAYER 7 — ANALYTICS RESEARCH (SEPARATE REPO / OFFLINE PIPELINE)
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : Cloudflare DDoS Protection
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Cloudflare, Inc.
+Type           : DDoS Mitigation Service
+Layer          : LAYER 1 — Network and Security
+Capacity       : Managed / cloud-scale (no fixed resource ceiling)
+Role           : Absorbs and mitigates volumetric and protocol-based
+                 denial-of-service attacks before traffic reaches hosted
+                 application services.
+Sits In Front Of : All public-facing platform endpoints
+Cost Category  : Cybersecurity
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : Cloudflare Web Application Firewall (WAF)
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Cloudflare, Inc.
+Type           : Web Application Firewall (WAF)
+Layer          : LAYER 1 — Network and Security
+Capacity       : Managed / rule-based inspection at cloud scale
+Role           : Inspects and filters incoming HTTP/HTTPS traffic.
+                 Protects platform endpoints against common web attack
+                 patterns including injection, cross-site scripting,
+                 and unauthorized access attempts.
+Sits In Front Of : UIM Core Backend API and frontend endpoints
+Cost Category  : Cybersecurity
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : UIM Core Backend
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Render Services, Inc.
+Type           : Web Service (REST API)
+Layer          : LAYER 3 — Application
+Initial Tier   : Starter
+Capacity       : 0.5 vCPU (shared), 512 MB RAM
+Upgrade Tier   : Standard — 1 vCPU, 2 GB RAM
+                 (upgrade trigger: sustained latency, concurrency issues,
+                 or memory pressure under normal production load)
+Runtime        : Python (or Node — TBD by implementation)
+Role           : Core application services layer. Handles:
+                   - Authentication and authorization
+                   - Role-based access control (RBAC)
+                   - Subscription and entitlement management
+                   - Collector onboarding and profile management
+                   - Data submission intake endpoints
+                   - Dashboard and reporting data endpoints
+                   - Administrative operations
+                   - Feature access control per subscription tier
+Communicates With :
+  - Main Database (read/write via internal connection)
+  - Resend Email Service (outbound transactional email)
+  - UIM X Frontend (inbound HTTPS requests)
+  - Sentinel A1 (indirect — shares database, no direct HTTP link)
+Exposed To     : Public internet (via Cloudflare WAF + DDoS layer)
+Cost Category  : Infrastructure
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : Sentinel A1
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Render Services, Inc.
+Type           : Background Worker (persistent, non-HTTP)
+Layer          : LAYER 4 — Data Processing
+Initial Tier   : Starter
+Capacity       : 0.5 vCPU (shared), 512 MB RAM
+Upgrade Trigger: When batch processing cycle duration approaches or exceeds
+                 the threshold polling interval, or when backlog of unprocessed
+                 rows accumulates across consecutive cycles.
+Runtime        : Python
+Execution Model: Threshold-based polling loop
+                   - Worker runs continuously
+                   - Checks pending raw row count
+                   - If row count meets threshold: triggers processing pipeline
+                   - Sleeps and repeats
+Not Triggered By : HTTP requests, external API calls, or cron schedule
+Role           : Asynchronous data-processing engine for UIM platform.
+                 Responsibilities:
+                   - Read raw unprocessed submissions from Main Database
+                   - Convert raw rows into structured DataFrames
+                   - Execute analytics pipeline (imported Python modules)
+                   - Write approved, rejected, and incident records to database
+                   - Log processing status, row counts, and timing per function
+                   - Flag anomalies and outliers for review
+Analytics Pipeline (imported from analytics modules):
+  Phase 1 — Data Quality & Processing
+    - Data cleaning
+    - Preprocessing and standardisation
+    - Smoothing
+    - Outlier detection
+    - Anomaly detection
+    - Validation and approval/rejection classification
+  Phase 2 — Forecasting (roadmap / future integration)
+    - Price forecasting
+    - Availability forecasting
+    - Predictive trend estimation
+Communicates With :
+  - Main Database (read raw submissions, write processed results)
+  - No public HTTP interface
+  - No direct communication with UIM Core Backend
+Not Exposed To : Public internet
+Cost Category  : Infrastructure
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : Main Database
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Render Services, Inc.
+Type           : Managed PostgreSQL Database Cluster
+Layer          : LAYER 5 — Data Persistence
+Capacity       : Managed cluster — initial tier TBD based on Render's
+                 current Postgres plan offerings at launch
+                 Storage: expandable, billed per GB beyond base allocation
+                 Point-in-time recovery: included on paid plans
+Engine         : PostgreSQL
+Role           : Central persistence layer for the entire platform. Stores:
+                   - User accounts and roles
+                   - Collector profiles and credentials
+                   - Raw market price submissions
+                   - Processed / validated price records
+                   - Rejected submission records
+                   - Incident and anomaly records
+                   - Subscription and entitlement records
+                   - Platform metadata and configuration
+                   - Reporting and analytics datasets
+Access Model   :
+  - UIM Core Backend : read/write (application user)
+  - Sentinel A1      : read raw submissions, write processed results
+                       (dedicated service user)
+  - Analytics Team   : read-only (dedicated analyst user — selected tables
+                       and/or analytics views only, no writes)
+  - Developer (admin): full access via DBeaver client
+  - Analysts (read)  : access via DBeaver client, restricted credentials
+Cost Category  : Infrastructure
+
+────────────────────────────────────────────────────────────────────────────────
+COMPONENT : Email Service
+────────────────────────────────────────────────────────────────────────────────
+Provider       : Resend
+Type           : Transactional Email Service
+Layer          : LAYER 6 — Communications
+Capacity       : Managed / cloud-delivered
+                 Entry plan covers low-volume transactional sends
+Role           : Handles all system-generated outbound email including:
+                   - User registration and verification
+                   - Subscription notifications
+                   - Collector submission alerts
+                   - Administrative communications
+                   - Platform status and incident notifications
+Communicates With : UIM Core Backend (inbound API call to send email)
+Cost Category  : Infrastructure
+
+
+
+--------------------------------------------------------------------------------
+6. DATA FLOW SUMMARY
+--------------------------------------------------------------------------------
+
+[Collector] 
+    → HTTPS POST → [Cloudflare WAF/DDoS] 
+    → [UIM Core Backend API] 
+    → INSERT raw submission → [Main Database]
+
+[Sentinel A1 — polling loop]
+    → SELECT raw pending rows → [Main Database]
+    → load into DataFrame
+    → apply Data Quality & Processing modules
+    → apply Forecasting modules (future)
+    → WRITE approved / rejected / incidents → [Main Database]
+    → log metrics and timing
+
+[UIM X Frontend]
+    → HTTPS GET → [Cloudflare WAF/DDoS]
+    → [UIM Core Backend API]
+    → SELECT processed data → [Main Database]
+    → return structured response → render dashboard
+
+[Analytics Team]
+    → SELECT read-only → [Main Database] (DBeaver, restricted user)
+    → prototype and validate in notebooks
+    → produce .py modules
+    → submit PR to analytics repo
+    → engineer reviews and integrates into Sentinel A1
+
+
+--------------------------------------------------------------------------------
+7. ACCESS AND ROLES SUMMARY
+--------------------------------------------------------------------------------
+
+Role                  Tool          DB Access         Scope
+--------------------  ------------  ----------------  --------------------------
+Platform Engineer     DBeaver       Full admin        All schemas and tables
+UIM Core Backend      Internal      Read / Write      Application schema
+Sentinel A1           Internal      Read / Write      Raw + processed tables
+Analytics Team        DBeaver       Read-only         Selected tables / views
+Subscribers           UIM-X UI      None (via API)    Processed data via API
+Collectors            UIM-X / App   None (via API)    Submission endpoints only
+
+
+--------------------------------------------------------------------------------
+10. REPOSITORY STRUCTURE (PRODUCTION)
+--------------------------------------------------------------------------------
+
+sentinel-a1/                        ← Production repo (engineer-owned)
+  app/
+    main.py                         ← Entry point
+    worker.py                       ← Polling loop and lifecycle
+    orchestrator.py                 ← Pipeline execution coordinator
+    db.py                           ← Database connection and queries
+    config.py                       ← Environment and configuration
+    io_raw.py                       ← Raw data reader
+    io_results.py                   ← Results writer
+  analytics/                        ← Promoted from analytics research repo
+    data_quality_processing/
+      cleaning.py
+      preprocessing.py
+      smoothing.py
+      scaling.py
+      outliers.py
+      anomalies.py
+      validation.py
+    forecasting/
+      price_forecast.py
+      availability_forecast.py
+      models.py
+  tests/
+  requirements.txt
+  README.md
+
+analytics-research/                 ← Separate analyst repo
+  analytics/
+    data_quality_processing/
+    forecasting/
+  notebooks/
+  data/
+    sample_3_months.csv
+  docs/
+    pipeline_sequence.md
+
+
+--------------------------------------------------------------------------------
+END OF DOCUMENT
+--------------------------------------------------------------------------------
